@@ -24,6 +24,8 @@ rayon="1.10.0"
 kernels = { path = "./src/kernels", version="0.4.1", optional = true}
 metal = { version = "0.27.0", features = ["mps"], optional = true }
 metal-kernels = { path = "./src/metal-kernels", version="0.1.9", optional = true}
+objc2 = { version = "0.6", optional = true }
+objc2-metal = { version = "0.3", optional = true }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:kernels"]
@@ -34,5 +36,6 @@ flash-context = ["dep:candle-flash-attn", "candle-flash-attn/flash-context", "ke
 no-marlin = ["dep:kernels", "kernels/no-marlin"]
 no-fp8-kvcache = ["dep:kernels", "kernels/no-fp8-kvcache"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal-kernels", "dep:metal"]
+metal4 = ["metal", "metal-kernels/metal4", "dep:objc2", "dep:objc2-metal"]
 cutlass = ["dep:kernels", "kernels/cutlass"]
 flashinfer = ["cuda", "dep:kernels", "kernels/flashinfer"]

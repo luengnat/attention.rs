@@ -187,6 +187,73 @@ pub fn call_copy_blocks(
     Ok(())
 }
 
+#[cfg(feature = "metal4")]
+fn metal4_is_available() -> bool {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        // Phase-1 conservative check: Apple Silicon + default Metal device presence.
+        objc2_metal::MTLCreateSystemDefaultDevice().is_some()
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        false
+    }
+}
+
+/// Parallel entrypoint for the Metal4 backend.
+///
+/// Phase-1 behavior intentionally reuses the existing kernel dispatch path.
+#[allow(clippy::too_many_arguments)]
+pub fn call_copy_blocks_metal4(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    key_cache: &Buffer,
+    key_cache_offset: usize,
+    value_cache: &Buffer,
+    value_cache_offset: usize,
+    block_mapping: &Buffer,
+    block_mapping_offset: usize,
+    num_pairs: u64,
+    numel_per_block: u64,
+) -> Result<(), MetalKernelError> {
+    #[cfg(feature = "metal4")]
+    {
+        if metal4_is_available() {
+            return call_copy_blocks(
+                device,
+                ep,
+                kernels,
+                ty,
+                key_cache,
+                key_cache_offset,
+                value_cache,
+                value_cache_offset,
+                block_mapping,
+                block_mapping_offset,
+                num_pairs,
+                numel_per_block,
+            );
+        }
+    }
+
+    call_copy_blocks(
+        device,
+        ep,
+        kernels,
+        ty,
+        key_cache,
+        key_cache_offset,
+        value_cache,
+        value_cache_offset,
+        block_mapping,
+        block_mapping_offset,
+        num_pairs,
+        numel_per_block,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_reshape_and_cache(
     device: &Device,
