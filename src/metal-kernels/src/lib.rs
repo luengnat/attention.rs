@@ -222,6 +222,73 @@ fn env_metal4_copy_blocks_mode() -> String {
 }
 
 #[cfg(feature = "metal4")]
+#[allow(clippy::too_many_arguments)]
+fn copy_blocks_via_tensor_msl(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    key_cache: &Buffer,
+    key_cache_offset: usize,
+    value_cache: &Buffer,
+    value_cache_offset: usize,
+    block_mapping: &Buffer,
+    block_mapping_offset: usize,
+    num_pairs: u64,
+    numel_per_block: u64,
+) -> Result<(), MetalKernelError> {
+    if key_cache_offset != 0 || value_cache_offset != 0 || block_mapping_offset != 0 {
+        return Err(MetalKernelError::Metal4TensorUnavailable(
+            "tensor_msl path currently requires zero offsets".to_string(),
+        ));
+    }
+
+    let name = match ty {
+        DType::F32 => "copy_blocks_tensor_float",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32],
+                got: other,
+            })
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let numel_per_block_u32 = u32::try_from(numel_per_block).map_err(|_| {
+        MetalKernelError::Metal4TensorUnavailable(
+            "numel_per_block does not fit in u32 for tensor_msl path".to_string(),
+        )
+    })?;
+
+    set_params!(
+        encoder,
+        (
+            (key_cache, 0usize),
+            (value_cache, 0usize),
+            (block_mapping, 0usize),
+            numel_per_block_u32
+        )
+    );
+
+    let thread_groups_count = MTLSize {
+        width: num_pairs,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: numel_per_block.min(1024),
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    Ok(())
+}
+
+#[cfg(feature = "metal4")]
 fn dtype_to_mtl_tensor_type(dtype: DType) -> Result<MTLTensorDataType, MetalKernelError> {
     match dtype {
         DType::F32 => Ok(MTLTensorDataType::Float32),
@@ -393,19 +460,38 @@ pub fn call_copy_blocks_metal4(
     #[cfg(feature = "metal4")]
     {
         if metal4_is_available() {
-            if env_metal4_copy_blocks_mode() == "tensor" {
-                return copy_blocks_via_mtltensor(
-                    device,
-                    ty,
-                    key_cache,
-                    key_cache_offset,
-                    value_cache,
-                    value_cache_offset,
-                    block_mapping,
-                    block_mapping_offset,
-                    num_pairs,
-                    numel_per_block,
-                );
+            match env_metal4_copy_blocks_mode().as_str() {
+                "tensor" => {
+                    return copy_blocks_via_mtltensor(
+                        device,
+                        ty,
+                        key_cache,
+                        key_cache_offset,
+                        value_cache,
+                        value_cache_offset,
+                        block_mapping,
+                        block_mapping_offset,
+                        num_pairs,
+                        numel_per_block,
+                    );
+                }
+                "tensor_msl" => {
+                    return copy_blocks_via_tensor_msl(
+                        device,
+                        ep,
+                        kernels,
+                        ty,
+                        key_cache,
+                        key_cache_offset,
+                        value_cache,
+                        value_cache_offset,
+                        block_mapping,
+                        block_mapping_offset,
+                        num_pairs,
+                        numel_per_block,
+                    );
+                }
+                _ => {}
             }
             return call_copy_blocks(
                 device,

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, str};
-const METAL_SOURCES: [&str; 8] = [
+const METAL_SOURCES: [&str; 9] = [
     "copy_blocks",
+    "copy_blocks_tensor",
     "pagedattention",
     "reshape_and_cache",
     "prefill_paged_attn",
