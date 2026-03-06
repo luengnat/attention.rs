@@ -8,11 +8,11 @@ template <typename T>
     tensor<device T, dextents<uint, 1>> value_cache [[buffer(1)]],
     const device int64_t* block_mapping [[buffer(2)]],
     device const uint& numel_per_block [[buffer(3)]],
-    uint gid [[thread_position_in_grid]],
+    uint group_id [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_threadgroup [[threads_per_threadgroup]])
 {
-    const uint pair_idx = gid;
+    const uint pair_idx = group_id;
 
     const int64_t src_block_number = block_mapping[2 * pair_idx];
     const int64_t dst_block_number = block_mapping[2 * pair_idx + 1];
@@ -34,6 +34,6 @@ template [[host_name("copy_blocks_tensor_float")]]
     tensor<device float, dextents<uint, 1>> value_cache [[buffer(1)]],
     const device int64_t* block_mapping [[buffer(2)]],
     device const uint& numel_per_block [[buffer(3)]],
-    uint gid [[thread_position_in_grid]],
+    uint group_id [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_threadgroup [[threads_per_threadgroup]]);

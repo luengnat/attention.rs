@@ -116,7 +116,7 @@ fn copy_blocks_metal4_matches_metal3() {
     assert_eq!(got_key_m4, got_key_m3, "key cache output mismatch");
     assert_eq!(got_val_m4, got_val_m3, "value cache output mismatch");
 
-    // tensor_msl path is still experimental; ensure it runs and returns sane data.
+    // tensor_msl path is experimental until explicit tensor argument binding is wired.
     assert_eq!(got_key_m4_tensor.len(), total);
     assert_eq!(got_val_m4_tensor.len(), total);
 
