@@ -3,6 +3,12 @@
 use candle_core::DType;
 use metal::{Buffer, Device, MTLResourceOptions};
 use metal_kernels::{call_copy_blocks, call_copy_blocks_metal4, Kernels};
+use std::sync::{Mutex, OnceLock};
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn new_buffer_from_slice<T: Copy>(device: &Device, data: &[T]) -> Buffer {
     let size = std::mem::size_of_val(data) as u64;
@@ -17,6 +23,7 @@ fn read_buffer_as_vec_f32(buffer: &Buffer, len: usize) -> Vec<f32> {
 
 #[test]
 fn copy_blocks_metal4_matches_metal3() {
+    let _guard = env_lock().lock().expect("env lock poisoned");
     let Some(device) = Device::system_default() else {
         return;
     };
@@ -119,6 +126,7 @@ fn copy_blocks_metal4_matches_metal3() {
 
 #[test]
 fn copy_blocks_metal4_tensor_perf_smoke() {
+    let _guard = env_lock().lock().expect("env lock poisoned");
     let Some(device) = Device::system_default() else {
         return;
     };

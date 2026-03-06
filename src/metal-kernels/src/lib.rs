@@ -433,7 +433,6 @@ fn copy_blocks_via_mtltensor(
             );
         }
     }
-
     blit.end_encoding();
     cmd.commit();
     cmd.wait_until_completed();

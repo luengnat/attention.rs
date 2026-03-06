@@ -10,8 +10,8 @@ use metal_kernels::{call_copy_blocks_metal4, Kernels};
 use std::time::Instant;
 
 const NUM_SAMPLES: u64 = 2;
-const WARMUP_ITERS: usize = 5;
-const MEASURE_ITERS: usize = 20;
+const WARMUP_ITERS: usize = 20;
+const MEASURE_ITERS: usize = 100;
 
 fn new_buffer_from_slice<T: Copy>(device: &Device, data: &[T]) -> Buffer {
     let size = std::mem::size_of_val(data) as u64;
@@ -243,7 +243,7 @@ fn copy_blocks_low_level_metrics() {
         }
     }
 
-    // Tensor mode: collect CPU timing (this mode internally creates/commits its own command buffer).
+    // Tensor mode: collect CPU timing of encoded+submitted work.
     std::env::set_var("ATTENTION_RS_METAL4_COPY_BLOCKS_MODE", "tensor");
     let key_tensor = new_buffer_from_slice(&device, &key_init);
     let value_tensor = new_buffer_from_slice(&device, &value_init);
@@ -266,6 +266,8 @@ fn copy_blocks_low_level_metrics() {
             numel_per_block as u64,
         )
         .expect("tensor warmup should succeed");
+        cb.commit();
+        cb.wait_until_completed();
     }
 
     let mut tensor_cpu_us = Vec::with_capacity(MEASURE_ITERS);
@@ -287,6 +289,8 @@ fn copy_blocks_low_level_metrics() {
             numel_per_block as u64,
         )
         .expect("tensor run should succeed");
+        cb.commit();
+        cb.wait_until_completed();
         tensor_cpu_us.push(t0.elapsed().as_secs_f64() * 1e6);
     }
 
