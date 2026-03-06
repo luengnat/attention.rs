@@ -189,15 +189,18 @@ pub fn call_copy_blocks(
 
 #[cfg(feature = "metal4")]
 fn metal4_is_available() -> bool {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        // Phase-1 conservative check: Apple Silicon + default Metal device presence.
-        objc2_metal::MTLCreateSystemDefaultDevice().is_some()
-    }
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    {
-        false
-    }
+    static METAL4_AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *METAL4_AVAILABLE.get_or_init(|| {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            // Phase-1 conservative check: Apple Silicon + default Metal device presence.
+            objc2_metal::MTLCreateSystemDefaultDevice().is_some()
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            false
+        }
+    })
 }
 
 /// Parallel entrypoint for the Metal4 backend.

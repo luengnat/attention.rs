@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 metal = { version = "0.27.0", features = ["mps"] }
 thiserror = "1"
 once_cell = "1.20.2"
-candle-core = { git = "https://github.com/guoqingbao/candle.git", version = "0.8.3", rev = "1e9d1a9" }
+candle-core = { git = "https://github.com/luengnat/candle.git", version = "0.8.3", rev = "5d5f08f64a2a4fc209264a3266afde9d853f46aa" }
 objc2 = { version = "0.6", optional = true }
 objc2-metal = { version = "0.3", optional = true }
 
@@ -18,4 +18,5 @@ objc2-metal = { version = "0.3", optional = true }
 anyhow = { version = "1", features = ["backtrace"] }
 
 [features]
-metal4 = ["dep:objc2", "dep:objc2-metal"]
+metal = ["candle-core/metal"]
+metal4 = ["metal", "dep:objc2", "dep:objc2-metal"]
