@@ -223,6 +223,7 @@ fn env_metal4_copy_blocks_mode() -> String {
 
 #[cfg(feature = "metal4")]
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn copy_blocks_via_tensor_msl(
     device: &Device,
     ep: impl EncoderProvider,
@@ -476,20 +477,9 @@ pub fn call_copy_blocks_metal4(
                     );
                 }
                 "tensor_msl" => {
-                    return copy_blocks_via_tensor_msl(
-                        device,
-                        ep,
-                        kernels,
-                        ty,
-                        key_cache,
-                        key_cache_offset,
-                        value_cache,
-                        value_cache_offset,
-                        block_mapping,
-                        block_mapping_offset,
-                        num_pairs,
-                        numel_per_block,
-                    );
+                    return Err(MetalKernelError::Metal4TensorUnavailable(
+                        "tensor_msl mode is disabled: objc2-metal currently exposes no tensor argument binding for compute dispatch".to_string(),
+                    ));
                 }
                 _ => {}
             }

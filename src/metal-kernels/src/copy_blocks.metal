@@ -8,11 +8,11 @@ template<typename T>
     device T* value_cache [[buffer(1)]],
     const device int64_t* block_mapping [[buffer(2)]],
     device const int& numel_per_block,
-    uint gid [[thread_position_in_grid]],
+    uint group_id [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_threadgroup [[threads_per_threadgroup]])
 {
-    const int pair_idx = gid;
+    const int pair_idx = group_id;
     
     int64_t src_block_number = block_mapping[2 * pair_idx];
     int64_t dst_block_number = block_mapping[2 * pair_idx + 1];
@@ -42,7 +42,7 @@ template<typename T>
     device type * value_cache_ptrs [[buffer(1)]],                  \
     const device int64_t* block_mapping [[buffer(2)]],                  \
     device const int& numel_per_block,                  \
-    uint gid [[thread_position_in_grid]],                  \
+    uint group_id [[threadgroup_position_in_grid]],                  \
     uint tid [[thread_position_in_threadgroup]],                  \
     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
