@@ -6,6 +6,15 @@ use metal::{
 use once_cell::sync::OnceCell;
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
+#[cfg(feature = "metal4")]
+use {
+    metal::foreign_types::{ForeignType, ForeignTypeRef},
+    objc2::{AnyThread, runtime::ProtocolObject},
+    objc2_metal::{
+        MTLBlitCommandEncoder, MTLBuffer as Objc2MTLBuffer, MTLTensorDataType, MTLTensorDescriptor,
+        MTLTensorExtents,
+    },
+};
 
 pub mod utils;
 use utils::EncoderProvider;
@@ -34,6 +43,8 @@ pub enum MetalKernelError {
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
+    #[error("metal4 tensor path unavailable: {0}")]
+    Metal4TensorUnavailable(String),
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
@@ -203,6 +214,164 @@ fn metal4_is_available() -> bool {
     })
 }
 
+#[cfg(feature = "metal4")]
+fn env_metal4_copy_blocks_mode() -> String {
+    std::env::var("ATTENTION_RS_METAL4_COPY_BLOCKS_MODE")
+        .unwrap_or_else(|_| "kernel".to_string())
+        .to_ascii_lowercase()
+}
+
+#[cfg(feature = "metal4")]
+fn dtype_to_mtl_tensor_type(dtype: DType) -> Result<MTLTensorDataType, MetalKernelError> {
+    match dtype {
+        DType::F32 => Ok(MTLTensorDataType::Float32),
+        DType::F16 => Ok(MTLTensorDataType::Float16),
+        DType::BF16 => Ok(MTLTensorDataType::BFloat16),
+        other => Err(MetalKernelError::DTypeMismatch {
+            expected: vec![DType::F32, DType::F16, DType::BF16],
+            got: other,
+        }),
+    }
+}
+
+#[cfg(feature = "metal4")]
+unsafe fn as_objc_protocol<P: ?Sized>(ptr: *mut std::ffi::c_void) -> &'static ProtocolObject<P> {
+    // SAFETY:
+    // - The pointer comes from `metal-rs` and points to a live Objective-C object.
+    // - Caller guarantees that the object conforms to protocol `P`.
+    &*(ptr as *const ProtocolObject<P>)
+}
+
+#[cfg(feature = "metal4")]
+fn tensor_extents_1d(value: usize) -> Result<objc2::rc::Retained<MTLTensorExtents>, MetalKernelError> {
+    let values: [isize; 1] = [value as isize];
+    // SAFETY: rank=1 and pointer is valid for 1 element.
+    unsafe {
+        MTLTensorExtents::initWithRank_values(MTLTensorExtents::alloc(), 1, values.as_ptr())
+            .ok_or_else(|| {
+                MetalKernelError::Metal4TensorUnavailable(
+                    "failed to allocate MTLTensorExtents".to_string(),
+                )
+            })
+    }
+}
+
+#[cfg(feature = "metal4")]
+fn copy_blocks_via_mtltensor(
+    device: &Device,
+    ty: DType,
+    key_cache: &Buffer,
+    key_cache_offset: usize,
+    value_cache: &Buffer,
+    value_cache_offset: usize,
+    block_mapping: &Buffer,
+    block_mapping_offset: usize,
+    num_pairs: u64,
+    numel_per_block: u64,
+) -> Result<(), MetalKernelError> {
+    let queue = device.new_command_queue();
+    let cmd = queue.new_command_buffer();
+
+    let data_type = dtype_to_mtl_tensor_type(ty)?;
+    let elem_size = ty.size_in_bytes() as u64;
+
+    let key_total_elems = (key_cache.length() / elem_size) as usize;
+    let value_total_elems = (value_cache.length() / elem_size) as usize;
+
+    let key_desc = MTLTensorDescriptor::new();
+    key_desc.setDataType(data_type);
+    let key_dims = tensor_extents_1d(key_total_elems)?;
+    key_desc.setDimensions(&key_dims);
+    let key_strides = tensor_extents_1d(1)?;
+    key_desc.setStrides(Some(&key_strides));
+
+    let value_desc = MTLTensorDescriptor::new();
+    value_desc.setDataType(data_type);
+    let value_dims = tensor_extents_1d(value_total_elems)?;
+    value_desc.setDimensions(&value_dims);
+    let value_strides = tensor_extents_1d(1)?;
+    value_desc.setStrides(Some(&value_strides));
+
+    // SAFETY: pointers originate from live `metal-rs` objects with matching Objective-C protocols.
+    let key_buf = unsafe { as_objc_protocol::<dyn Objc2MTLBuffer>(key_cache.as_ptr().cast()) };
+    // SAFETY: pointers originate from live `metal-rs` objects with matching Objective-C protocols.
+    let value_buf = unsafe { as_objc_protocol::<dyn Objc2MTLBuffer>(value_cache.as_ptr().cast()) };
+
+    // SAFETY: buffers and descriptors are valid for the provided offsets.
+    let key_tensor = unsafe {
+        key_buf
+            .newTensorWithDescriptor_offset_error(&key_desc, key_cache_offset)
+            .map_err(|e| {
+                MetalKernelError::Metal4TensorUnavailable(format!(
+                    "failed to create key tensor: {e:?}"
+                ))
+            })?
+    };
+    // SAFETY: buffers and descriptors are valid for the provided offsets.
+    let value_tensor = unsafe {
+        value_buf
+            .newTensorWithDescriptor_offset_error(&value_desc, value_cache_offset)
+            .map_err(|e| {
+                MetalKernelError::Metal4TensorUnavailable(format!(
+                    "failed to create value tensor: {e:?}"
+                ))
+            })?
+    };
+
+    let map_ptr = block_mapping.contents() as *const i64;
+    if map_ptr.is_null() {
+        return Err(MetalKernelError::Metal4TensorUnavailable(
+            "block_mapping buffer is not CPU-visible for tensor path".to_string(),
+        ));
+    }
+    // SAFETY: `block_mapping` is expected to contain 2*num_pairs i64 entries.
+    let mapping = unsafe {
+        std::slice::from_raw_parts(
+            map_ptr.add(block_mapping_offset / std::mem::size_of::<i64>()),
+            (num_pairs as usize) * 2,
+        )
+    };
+    let copy_dims = tensor_extents_1d(numel_per_block as usize)?;
+    let blit = cmd.new_blit_command_encoder();
+    // SAFETY: pointers originate from live `metal-rs` objects with matching Objective-C protocols.
+    let blit_obj = unsafe { as_objc_protocol::<dyn MTLBlitCommandEncoder>(blit.as_ptr().cast()) };
+    for pair in 0..(num_pairs as usize) {
+        let src_block = mapping[2 * pair] as i64;
+        let dst_block = mapping[2 * pair + 1] as i64;
+        let src_offset = (src_block * numel_per_block as i64) as usize;
+        let dst_offset = (dst_block * numel_per_block as i64) as usize;
+        let src_origin = tensor_extents_1d(src_offset)?;
+        let dst_origin = tensor_extents_1d(dst_offset)?;
+
+        // SAFETY:
+        // - Source/destination tensors remain alive for command encoding.
+        // - extents are rank-1 and within configured tensor dimensions.
+        unsafe {
+            blit_obj.copyFromTensor_sourceOrigin_sourceDimensions_toTensor_destinationOrigin_destinationDimensions(
+                &key_tensor,
+                &src_origin,
+                &copy_dims,
+                &key_tensor,
+                &dst_origin,
+                &copy_dims,
+            );
+            blit_obj.copyFromTensor_sourceOrigin_sourceDimensions_toTensor_destinationOrigin_destinationDimensions(
+                &value_tensor,
+                &src_origin,
+                &copy_dims,
+                &value_tensor,
+                &dst_origin,
+                &copy_dims,
+            );
+        }
+    }
+
+    blit.end_encoding();
+    cmd.commit();
+    cmd.wait_until_completed();
+    Ok(())
+}
+
 /// Parallel entrypoint for the Metal4 backend.
 ///
 /// Phase-1 behavior intentionally reuses the existing kernel dispatch path.
@@ -224,6 +393,20 @@ pub fn call_copy_blocks_metal4(
     #[cfg(feature = "metal4")]
     {
         if metal4_is_available() {
+            if env_metal4_copy_blocks_mode() == "tensor" {
+                return copy_blocks_via_mtltensor(
+                    device,
+                    ty,
+                    key_cache,
+                    key_cache_offset,
+                    value_cache,
+                    value_cache_offset,
+                    block_mapping,
+                    block_mapping_offset,
+                    num_pairs,
+                    numel_per_block,
+                );
+            }
             return call_copy_blocks(
                 device,
                 ep,

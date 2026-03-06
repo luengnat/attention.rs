@@ -91,3 +91,90 @@ fn copy_blocks_metal4_matches_metal3() {
     assert_eq!(got_val_m4, got_val_m3, "value cache output mismatch");
 
 }
+
+#[test]
+fn copy_blocks_metal4_tensor_perf_smoke() {
+    let Some(device) = Device::system_default() else {
+        return;
+    };
+
+    let num_blocks = 256usize;
+    let numel_per_block = 256usize;
+    let total = num_blocks * numel_per_block;
+
+    let mut key_init = Vec::with_capacity(total);
+    let mut value_init = Vec::with_capacity(total);
+    for i in 0..total {
+        key_init.push(i as f32 + 1.0);
+        value_init.push(10000.0 + i as f32);
+    }
+
+    let mut map = Vec::with_capacity(512);
+    for i in 0..256i64 {
+        map.push(i);
+        map.push((255 - i) as i64);
+    }
+
+    let queue = device.new_command_queue();
+    let kernels = Kernels::default();
+
+    let run = |mode: &str| {
+        std::env::set_var("ATTENTION_RS_METAL4_COPY_BLOCKS_MODE", mode);
+        let key_buf = new_buffer_from_slice(&device, &key_init);
+        let value_buf = new_buffer_from_slice(&device, &value_init);
+        let map_buf = new_buffer_from_slice(&device, &map);
+
+        let warmup = queue.new_command_buffer();
+        call_copy_blocks_metal4(
+            &device,
+            warmup,
+            kernels,
+            DType::F32,
+            &key_buf,
+            0,
+            &value_buf,
+            0,
+            &map_buf,
+            0,
+            (map.len() / 2) as u64,
+            numel_per_block as u64,
+        )
+        .expect("warmup should succeed");
+        warmup.commit();
+        warmup.wait_until_completed();
+
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let cb = queue.new_command_buffer();
+            call_copy_blocks_metal4(
+                &device,
+                cb,
+                kernels,
+                DType::F32,
+                &key_buf,
+                0,
+                &value_buf,
+                0,
+                &map_buf,
+                0,
+                (map.len() / 2) as u64,
+                numel_per_block as u64,
+            )
+            .expect("run should succeed");
+            cb.commit();
+            cb.wait_until_completed();
+        }
+        start.elapsed()
+    };
+
+    let t_kernel = run("kernel");
+    let t_tensor = run("tensor");
+    let ratio = t_tensor.as_secs_f64() / t_kernel.as_secs_f64();
+    println!("copy_blocks perf-smoke: kernel={t_kernel:?} tensor={t_tensor:?} ratio={ratio:.3}");
+
+    // Phase-1 guard: detect catastrophic regressions only.
+    assert!(
+        ratio <= 5.0,
+        "mtltensor copy path is catastrophically slower in smoke test: ratio={ratio:.3}"
+    );
+}
